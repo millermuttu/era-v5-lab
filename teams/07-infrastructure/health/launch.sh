@@ -12,7 +12,8 @@
 set -u
 here=${SLURM_SUBMIT_DIR:?run with sbatch from the health folder}
 gpus=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-8}}
-export EXPECTED_GPUS=${EXPECTED_GPUS:-$gpus}
+# The health check counts the GPUs Slurm gave the job, even when the test uses fewer.
+export EXPECTED_GPUS=${EXPECTED_GPUS:-${SLURM_GPUS_ON_NODE:-$gpus}}
 start=$(date '+%F %T')
 
 echo "== health check on $SLURM_JOB_NODELIST"

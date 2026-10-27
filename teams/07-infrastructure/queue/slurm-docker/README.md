@@ -1,6 +1,6 @@
-# Slurm in Docker: two-account test
+# Slurm in Docker: queue and health test
 
-Week 1 test for the job queue (Team 7). It needs no GPU: each compute node has 8 fake GPUs that Slurm counts but does not bind to a device.
+Week 1 test for the job queue (Team 7). It needs no GPU: each compute node has 8 fake GPUs that Slurm counts but does not bind to a device, and a fake `nvidia-smi` that the health scripts read.
 
 ## Cluster
 
@@ -13,6 +13,22 @@ Week 1 test for the job queue (Team 7). It needs no GPU: each compute node has 8
 
 Slurm 25.11 from Ubuntu 26.04. The Slurm 23.11 package in Ubuntu 24.04 cannot launch job steps in Docker, because it has no `CgroupPlugin=disabled`.
 
+Every Slurm container mounts `teams/07-infrastructure/health` read-only at `/lab/health`, the same path on every node, as a shared file system would. `/shared` is a writable volume on every node for job output.
+
+## Files: one config for Docker and the real node
+
+| File | Docker | Real node |
+|---|---|---|
+| `slurm.conf` | Shared: accounting, scheduling, logs | Same file |
+| `site.conf` (included by `slurm.conf`) | `docker/`: five containers, fake GPUs, no cgroups | `node/`: one host runs every daemon, cgroups on |
+| `gres.conf` | `docker/`: fake GPU files | `node/`: `AutoDetect=nvml` |
+| `cgroup.conf` | `docker/`: disabled | `node/`: cores, memory and GPUs held to the job |
+| `slurmdbd.conf` | `docker/`: test password | `node/`: password set on the node, never committed |
+| `accounts.cfg` | `docker/`: team05 and team06, 4 GPUs each | `node/`: team01 to team12, no shares yet |
+| `fake-nvidia-smi`, `fake-dmesg` | `docker/`: installed over the real tools | Not used |
+
+`accounts.cfg` is loaded with `sacctmgr -i load file=accounts.cfg`. A second load changes nothing.
+
 ## Run
 
 ```
@@ -21,19 +37,45 @@ docker compose up -d --build
 docker compose down -v
 ```
 
+The first build downloads CPU PyTorch (about 200 MB). `test.sh` takes about 20 s.
+
 ## What `test.sh` checks
 
 Accounts `team05` (user alice) and `team06` (user bob) each get a share of 4 GPUs (`GrpTRES=gres/gpu=4`). User carol has no account.
 
-1. alice runs a job on `team05`.
-2. alice is refused on `team06`.
-3. carol is refused.
-4. A two-node job runs on `c1` and `c2`.
-5. alice's first 4-GPU job runs. Her second waits with reason `AssocGrpGRES`, and bob's 4-GPU job runs at the same time.
+1. `accounts.cfg` loads both accounts with their 4-GPU share.
+2. alice runs a job on `team05`.
+3. alice is refused on `team06`.
+4. carol is refused.
+5. A two-node job runs on `c1` and `c2`.
+6. alice's first 4-GPU job runs. Her second waits with reason `AssocGrpGRES`, and bob's 4-GPU job runs at the same time.
+7. `gpu_health.sh` passes on both nodes.
+8. An Xid 79 planted on `c2` fails `c2` and not `c1`.
+9. `launch.sh` runs as a 2-node batch job: health check, all-reduce (2 CPU processes per node over gloo), Xid scan.
+10. With a 92 °C GPU planted on `c2`, `launch.sh` stops before the all-reduce and names `c2`.
 
-## Different on the real node
+## Faults by hand
 
-- Real GPUs: `gres.conf` uses `AutoDetect=nvml`, and `cgroup.conf` turns cgroups on so that jobs are held to their GPUs.
-- The munge key is made on the node and copied to each host. Here it is baked into the image.
-- The database password is not `slurm`.
-- TSAI sets the GPU share for each team per day, and we put it in `GrpTRES`.
+The fakes read files in `/run/fake` on each node. For example:
+
+```
+docker compose exec c2 sh -c 'mkdir -p /run/fake && echo " Link 0: <inactive>" > /run/fake/nvlink'
+docker compose exec slurmctld srun -N2 /lab/health/gpu_health.sh
+docker compose exec c2 rm -rf /run/fake
+```
+
+| File | Replaces |
+|---|---|
+| `gpus` | `nvidia-smi --query-gpu` output, one line per GPU: index, temperature, uncorrected ECC errors, row remap pending, row remap failed |
+| `nvlink` | `nvidia-smi nvlink -s` output |
+| `dmesg` | the kernel log that `xid_scan.py` reads |
+
+## Moving to the real node
+
+1. Check the node's Ubuntu version. These configs are tested with Slurm 25.11. Slurm 23.11 (Ubuntu 24.04) may need changes.
+2. Install `slurm-wlm slurmdbd munge mariadb-server`. Make the munge key on the node.
+3. Copy `slurm.conf` and the `node/` files to `/etc/slurm/`. In `site.conf`, put the host name in place of `NODE`, and the output of `slurmd -C` in place of the `NodeName` line. Set the database password in `slurmdbd.conf`.
+4. Load `node/accounts.cfg`, after adding each team's GPU share (TSAI sets it) and the users.
+5. Run the health check and the NCCL test: `teams/07-infrastructure/health/TESTING.md`, level 3.
+
+Docker cannot test these, so check them first on the node: GPU binding through cgroups, NVML autodetect, the munge key, and InfiniBand between nodes.

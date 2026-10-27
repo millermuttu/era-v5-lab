@@ -1,0 +1,5 @@
+#!/bin/bash
+# Stands in for dmesg on the fake nodes, for xid_scan.py: prints /run/fake/dmesg, or nothing.
+# It ignores --since, so a planted Xid counts for every scan until the file is removed.
+cat /run/fake/dmesg 2>/dev/null
+exit 0

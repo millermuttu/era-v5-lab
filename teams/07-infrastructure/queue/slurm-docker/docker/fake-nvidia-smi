@@ -1,0 +1,10 @@
+#!/bin/bash
+# Stands in for nvidia-smi on the fake nodes, for gpu_health.sh. Healthy unless a fault file says otherwise:
+#   /run/fake/gpus    replaces the --query-gpu output: index, temp, ECC errors, remap pending, remap failed
+#   /run/fake/nvlink  replaces the output of `nvidia-smi nvlink -s`
+if [ "$1" = nvlink ]; then
+  cat /run/fake/nvlink 2>/dev/null || echo " Link 0: 26.562 GB/s"
+  exit 0
+fi
+[ -f /run/fake/gpus ] && exec cat /run/fake/gpus
+for i in 0 1 2 3 4 5 6 7; do echo "$i, 40, 0, No, No"; done

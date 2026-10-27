@@ -2,6 +2,7 @@
 # Usage: entrypoint.sh slurmdbd|slurmctld|slurmd
 set -e
 su -s /bin/sh munge -c munged
+chmod 1777 /shared  # job output from any user
 case "$1" in
   slurmdbd)  exec slurmdbd -D ;;
   slurmctld) until sacctmgr -n show cluster >/dev/null 2>&1; do sleep 1; done

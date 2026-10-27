@@ -1,6 +1,7 @@
 """NCCL all-reduce test: checks the sum on every rank and measures bus bandwidth.
 
-Started by torchrun (see launch.sh), one process per GPU.
+Started by torchrun (see launch.sh), one process per GPU. With no GPU it runs on the CPU over gloo,
+for the Docker Slurm test; its bandwidth then means nothing.
 Knobs: SIZE_MB (default 1024), ITERS (default 20), MIN_BUSBW_GBPS (default 0, no limit).
 Exits 1 if the sum is wrong on any rank or the bandwidth is below MIN_BUSBW_GBPS.
 """
@@ -15,27 +16,30 @@ size_mb = int(os.environ.get("SIZE_MB", 1024))
 iters = int(os.environ.get("ITERS", 20))
 min_busbw = float(os.environ.get("MIN_BUSBW_GBPS", 0))
 
-torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
-dist.init_process_group("nccl")
+cuda = torch.cuda.is_available()
+if cuda:
+    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+dist.init_process_group("nccl" if cuda else "gloo")
+sync = torch.cuda.synchronize if cuda else (lambda: None)
 rank, world = dist.get_rank(), dist.get_world_size()
-x = torch.empty(size_mb * 2**20 // 4, device="cuda")
+x = torch.empty(size_mb * 2**20 // 4, device="cuda" if cuda else "cpu")
 
 # Correctness: every rank adds its ones, so each element must equal the world size.
 x.fill_(1.0)
 dist.all_reduce(x)
-ok = torch.tensor(int(torch.all(x == world).item()), device="cuda")
+ok = torch.tensor(int(torch.all(x == world).item()), device=x.device)
 dist.all_reduce(ok, op=dist.ReduceOp.MIN)
 
 # Bandwidth, on zeros so the sum never overflows.
 x.zero_()
 for _ in range(5):
     dist.all_reduce(x)
-torch.cuda.synchronize()
+sync()
 dist.barrier()
 t = time.perf_counter()
 for _ in range(iters):
     dist.all_reduce(x)
-torch.cuda.synchronize()
+sync()
 sec = (time.perf_counter() - t) / iters
 
 # Same formula as nccl-tests: ring all-reduce moves 2(n-1)/n of the buffer over each link.
