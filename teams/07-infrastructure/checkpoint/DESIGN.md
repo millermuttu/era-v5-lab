@@ -60,6 +60,8 @@ The loader turns a global sample index into (shard, row) from the seed alone, an
 
 ## Size and time
 
+Config v0 (Team 5) leaves the model sizes and the precision empty until TSAI fills them on 31 Oct, so the numbers below assume 30B parameters and fp32 master weights.
+
 30B parameters × (4 bytes weights + 8 bytes Adam) = about 360 GB per checkpoint.
 
 - **Save to local NVMe or shared disk.** Every rank writes in parallel. At 3 GB/s per node, 8 nodes save in about 15 s. Team 6 measures the real time at config v1 shape (week 2) and at full size (18 Nov).
@@ -83,13 +85,24 @@ A restore gives bit-equal loss only when all of these are the same as before the
 - number of GPUs and parallel layout (data, tensor and expert parallel sizes)
 - GPU type (H100 and B200 run different kernels)
 - PyTorch, CUDA and NCCL versions, and the kernel set (Team 6 freezes it on 23 Nov)
-- data order (seed and manifest)
+- data order (seed and manifest; config v0 sets `run.seed: 1234`)
+- attention kernel (config v0 sets `attention.impl: eager`, because the fast attention backward does not repeat)
 
 If one of them changes, the restore still works, but the loss is only close: a different reduction order changes the last bits. The restart scripts must keep the layout, and the runbook must say this. The planned failure in dry run 2 gets bit-equal loss only if the job comes back on the same layout.
 
 ## What the test proves
 
 `python ckpt.py` trains a small model with dropout, AdamW and a step LR schedule on the CPU. It runs 10 steps straight, then 5 steps with a save after each step. It restores into a new model with other weights and another seed, and runs steps 5 to 9. All 10 losses must be bit-equal (`==` on floats). With the RNG restore turned off, the test fails, so the RNG state is needed. The test also checks that a `.tmp` folder and a folder with no `COMPLETE` are skipped, and that `keep` and `keep_every` prune the right folders. A model saved on the GPU and restored on the CPU had bit-equal weights and Adam state (checked by hand, 27 Oct).
+
+## Config v0
+
+Team 5 config v0 (`shivman/configs/config_v0.yaml` in `udisinghania/ERA_V5_Architecture`) needs no change to `ckpt.py`:
+
+- `optim.name: adamw`: the Adam state is already saved.
+- `run.seed: 1234`: the same seed as the data position proposal above.
+- `loss.train_on: ntp`, with a second head trained on t+2: that head is part of the model state dict, so it is saved with the rest.
+- `embedding.type: kronecker`: its parameters are in the model state dict too.
+- `run.grad_clip: 1.0`: the harness clips before the optimizer step; nothing to save.
 
 ## Reading a checkpoint outside training
 
@@ -111,5 +124,5 @@ dcp_to_torch_save(ckpt.latest(root), "model.pt")   # then keep only the "model" 
 
 1. Local NVMe or a shared file system on the training nodes? This sets the save time.
 2. Do Teams 1 and 2 accept the data position format?
-3. Does config v1 (Team 5, 14 Nov) keep master weights in fp32? If it keeps them in bf16, the checkpoint is about 240 GB.
+3. Config v0 leaves `precision` empty. Does config v1 (Team 5, 14 Nov) keep master weights in fp32? If it keeps them in bf16, the checkpoint is about 240 GB.
 4. The plan sheet says H100 and B200. Do we also need A100 nodes?
