@@ -1,7 +1,8 @@
 #!/bin/bash
 # Pre-flight check of the GPUs on this node. On every node: srun --ntasks-per-node=1 gpu_health.sh
 # Prints one line per problem and exits 1 if the node should not run a job, 0 if it is fit.
-# Knobs: EXPECTED_GPUS (default 8), MAX_TEMP_C (default 85).
+# Knobs: EXPECTED_GPUS (default 8), MAX_TEMP_C (default 85),
+#   DCGM_LEVEL (default 1: quick; 3: long, before the run; 0: skip).
 set -u
 host=$(hostname -s)
 want=${EXPECTED_GPUS:-8}
@@ -27,6 +28,12 @@ done <<<"$out"
 # NVLink on HGX A100/H100: a down link halves all-reduce bandwidth without any error.
 down=$(nvidia-smi nvlink -s 2>/dev/null | grep -c inactive)
 [ "$down" -eq 0 ] || problem "$down NVLink links are inactive"
+
+# DCGM diagnostic, when DCGM is installed: finds a bad GPU before a job does (Session 15).
+lvl=${DCGM_LEVEL:-1}
+if [ "$lvl" != 0 ] && command -v dcgmi >/dev/null; then
+  diag=$(dcgmi diag -r "$lvl" 2>&1) || problem "dcgmi diag -r $lvl failed: $(grep -m1 -iE 'fail|error' <<<"$diag")"
+fi
 
 # Xids since boot. ponytail: a GPU reset clears the fault but not the log; reboot or drain by hand.
 python3 "$(dirname "$0")/xid_scan.py" || bad=1

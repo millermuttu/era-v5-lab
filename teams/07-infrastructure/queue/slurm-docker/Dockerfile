@@ -4,9 +4,10 @@ FROM ubuntu:26.04
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       slurm-wlm slurmdbd munge mariadb-client python3 python3-venv \
     && rm -rf /var/lib/apt/lists/*
-# CPU torch for health/allreduce.py, which falls back to gloo with no GPU.
+# CPU torch for health/allreduce.py and checkpoint/train_demo.py, which fall back to gloo with no GPU.
+# numpy: torch.distributed needs it to gather objects, which a multi-rank checkpoint save does.
 RUN python3 -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir torch==2.9.1 --index-url https://download.pytorch.org/whl/cpu
+    && /opt/venv/bin/pip install --no-cache-dir torch==2.9.1 numpy==2.5.2 --index-url https://download.pytorch.org/whl/cpu
 ENV PATH=/opt/venv/bin:$PATH
 RUN mkdir -p /etc/munge && dd if=/dev/urandom bs=1 count=1024 of=/etc/munge/munge.key 2>/dev/null \
     && chown munge:munge /etc/munge/munge.key && chmod 400 /etc/munge/munge.key \

@@ -4,7 +4,7 @@ x-slurm: &slurm
   image: lab-slurm
   # The team's scripts, read-only and at the same path on every node, as on a shared file system.
   # /shared is a writable volume on every node, for job output.
-  volumes: ["../../health:/lab/health:ro", "shared:/shared"]
+  volumes: ["../../health:/lab/health:ro", "../../checkpoint:/lab/checkpoint:ro", "shared:/shared"]
 services:
   mariadb:
     image: mariadb:11.4

@@ -13,7 +13,7 @@ Week 1 test for the job queue (Team 7). It needs no GPU: each compute node has 8
 
 Slurm 25.11 from Ubuntu 26.04. The Slurm 23.11 package in Ubuntu 24.04 cannot launch job steps in Docker, because it has no `CgroupPlugin=disabled`.
 
-Every Slurm container mounts `teams/07-infrastructure/health` read-only at `/lab/health`, the same path on every node, as a shared file system would. `/shared` is a writable volume on every node for job output.
+Every Slurm container mounts `teams/07-infrastructure/health` and `teams/07-infrastructure/checkpoint` read-only at `/lab/health` and `/lab/checkpoint`, the same path on every node, as a shared file system would. `/shared` is a writable volume on every node for job output.
 
 ## Files: one config for Docker and the real node
 
@@ -37,7 +37,7 @@ docker compose up -d --build
 docker compose down -v
 ```
 
-The first build downloads CPU PyTorch (about 200 MB). `test.sh` takes about 20 s.
+The first build downloads CPU PyTorch (about 200 MB). `test.sh` takes about 90 s.
 
 ## What `test.sh` checks
 
@@ -49,10 +49,12 @@ Accounts `team05` (user alice) and `team06` (user bob) each get a share of 4 GPU
 4. carol is refused.
 5. A two-node job runs on `c1` and `c2`.
 6. alice's first 4-GPU job runs. Her second waits with reason `AssocGrpGRES`, and bob's 4-GPU job runs at the same time.
-7. `gpu_health.sh` passes on both nodes.
-8. An Xid 79 planted on `c2` fails `c2` and not `c1`.
-9. `launch.sh` runs as a 2-node batch job: health check, all-reduce (2 CPU processes per node over gloo), Xid scan.
-10. With a 92 °C GPU planted on `c2`, `launch.sh` stops before the all-reduce and names `c2`.
+7. A `--requeue` job whose node goes down is requeued and starts again by itself, with `SLURM_RESTART_COUNT=1`.
+8. `gpu_health.sh` passes on both nodes.
+9. An Xid 79 planted on `c2` fails `c2` and not `c1`.
+10. `launch.sh` runs as a 2-node batch job: health check, all-reduce, reduce-scatter, all-gather and all-to-all (2 CPU processes per node over gloo), Xid scan.
+11. With a 92 °C GPU planted on `c2`, `launch.sh` stops before the collectives and names `c2`.
+12. Chained restart. `checkpoint/restart.sh` trains `train_demo.py` on 2 nodes (2 CPU processes each, FSDP2) and saves every step. After step 4 is COMPLETE, `c1` goes down; Slurm requeues the job, and it starts again from the newest COMPLETE checkpoint. Its losses and its final weights must be bit-equal to a run that never stopped. The test brings `c1` back at once, as a spare node would, and skips Slurm's 120 s requeue wait.
 
 ## Faults by hand
 

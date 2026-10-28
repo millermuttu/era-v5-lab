@@ -1,14 +1,17 @@
 """Save and restore the full training state. Design: DESIGN.md.
 
-    step, extra = load(root, model, optimizer, scheduler) or (0, {})
+    meta = {"config": config_sha, "tokenizer": tokenizer_sha, "embedding_policy_id": ...}
+    step, extra = load(root, model, optimizer, scheduler, meta) or (0, {})
     for step in range(step, total):
         ...train one step...
         if (step + 1) % every == 0:
-            save(root, step + 1, model, optimizer, scheduler, extra)
+            save(root, step + 1, model, optimizer, scheduler, extra, meta=meta)
 
 Works with plain, DDP and FSDP2 models, on GPU or CPU, with or without a process group.
 Self-test (CPU, a few seconds): python ckpt.py
 """
+import hashlib
+import json
 import random
 import shutil
 from pathlib import Path
@@ -42,18 +45,40 @@ def _set_rng_state(s):
         torch.cuda.set_rng_state(s["cuda"])
 
 
-def save(root, step, model, optimizer, scheduler=None, extra=None, keep=3, keep_every=0):
+def _frozen_hash(model):
+    """sha256 over every parameter that does not train. A frozen part must never change (Session 15)."""
+    h = hashlib.sha256()
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            t = p.full_tensor() if hasattr(p, "full_tensor") else p  # DTensor: gather the shards
+            h.update(name.encode())
+            h.update(t.detach().cpu().contiguous().reshape(-1).view(torch.uint8).numpy().tobytes())
+    return h.hexdigest()
+
+
+def _meta(path):
+    return json.loads((path / "meta.json").read_text())
+
+
+def save(root, step, model, optimizer, scheduler=None, extra=None, keep=3, keep_every=0, meta=None):
     """Save the state after `step` training steps into root/step_<step>. Call on every rank.
 
     Keeps the newest `keep` checkpoints, and every one whose step is a multiple of `keep_every`.
+    `meta` (plain JSON: config hash, tokenizer hash, embedding policy) is stored for load() to check.
+    Raises if a frozen parameter changed since the previous checkpoint.
     """
     root = Path(root)
     final = root / f"step_{step:08d}"
-    if final.exists():
+    if (final / "COMPLETE").exists():
         return
+    frozen = _frozen_hash(model)
+    prev = latest(root)
+    if prev and _meta(prev)["frozen"] != frozen:
+        raise RuntimeError(f"frozen parameters changed since {prev.name}; not saving")
     tmp = final.with_suffix(".tmp")
     if _rank() == 0:
         shutil.rmtree(tmp, ignore_errors=True)  # left by a save that crashed
+        shutil.rmtree(final, ignore_errors=True)  # no COMPLETE: a half-done download
         tmp.mkdir(parents=True)
     _barrier()
 
@@ -67,6 +92,7 @@ def save(root, step, model, optimizer, scheduler=None, extra=None, keep=3, keep_
     # Commit: COMPLETE is written last, so only a checkpoint with COMPLETE is ever read.
     # The same rule holds on S3, which has no rename: upload COMPLETE after every other file.
     if _rank() == 0:
+        (tmp / "meta.json").write_text(json.dumps({"step": step, "meta": meta, "frozen": frozen}, indent=1))
         (tmp / "COMPLETE").write_text(f"{step}\n")
         tmp.rename(final)
         done = sorted(root.glob("step_*[0-9]"))
@@ -82,15 +108,21 @@ def latest(root):
     return done[-1] if done else None
 
 
-def load(root, model, optimizer, scheduler=None):
+def load(root, model, optimizer, scheduler=None, meta=None):
     """Restore the newest COMPLETE checkpoint in root, RNGs included. Call on every rank.
 
     Returns (step, extra), or None if root has no COMPLETE checkpoint.
     The model may sit on another device or world size than at save time (DCP reshards).
+    Strict, because a misload looks like a normal run (Session 15): raises if `meta` differs from
+    the saved one, or if a model or optimizer key is missing from the checkpoint (a renamed layer).
     """
     path = latest(root)
     if path is None:
         return None
+    saved = _meta(path)["meta"] or {}
+    if meta is not None and saved != meta:
+        diff = sorted(k for k in {*saved, *meta} if saved.get(k) != meta.get(k))
+        raise ValueError(f"{path.name} was saved with other {diff}: {saved} != {meta}")
 
     model_sd, optim_sd = get_state_dict(model, optimizer)
     sd = {"model": model_sd, "optim": optim_sd}
@@ -112,6 +144,7 @@ def _selftest():
         torch.manual_seed(seed)
         model = torch.nn.Sequential(torch.nn.Linear(16, 64), torch.nn.GELU(), torch.nn.Dropout(0.2),
                                     torch.nn.Linear(64, 1))
+        model[0].bias.requires_grad_(False)  # a frozen part, as the Kronecker codec is
         opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
         sched = torch.optim.lr_scheduler.StepLR(opt, step_size=3, gamma=0.5)
         return model, opt, sched
@@ -128,9 +161,10 @@ def _selftest():
             sched.step()
             losses.append(loss.item())
             if root:
-                save(root, step + 1, model, opt, sched, {"tokens": (step + 1) * 8}, keep=3, keep_every=2)
+                save(root, step + 1, model, opt, sched, {"tokens": (step + 1) * 8}, keep=3, keep_every=2, meta=META)
         return losses
 
+    META = {"config": "sha-a", "tokenizer": "sha-t"}
     straight = train(*make(0), range(10))
     with tempfile.TemporaryDirectory() as root:
         root = Path(root)
@@ -138,11 +172,26 @@ def _selftest():
         (root / "step_00000009.tmp").mkdir()  # a save that crashed on disk
         (root / "step_00000010").mkdir()  # a half-done S3 download, no COMPLETE
         model, opt, sched = make(123)  # other weights and RNG; load must replace all of it
-        step, extra = load(root, model, opt, sched)
+        step, extra = load(root, model, opt, sched, META)
         assert (step, extra) == (5, {"tokens": 40}), (step, extra)
         resumed = first + train(model, opt, sched, range(step, 10))
         kept = sorted(p.parent.name for p in root.glob("step_*[0-9]/COMPLETE"))
         assert kept == ["step_00000002", "step_00000003", "step_00000004", "step_00000005"], kept
+
+        # Silent-failure guards (Session 15). Each must raise, not load or save quietly.
+        def raises(f, *a, **k):
+            try:
+                f(*a, **k)
+            except (Exception, dcp.api.CheckpointException):  # the latter is a BaseException
+                return True
+            return False
+        assert raises(load, root, *make(0), meta={**META, "config": "sha-b"}), "other config loaded"
+        renamed = torch.nn.Sequential(make(0)[0])  # every key gains a "0." prefix: a converter's renaming
+        assert raises(load, root, renamed, torch.optim.AdamW(renamed.parameters())), "renamed layers loaded"
+        with torch.no_grad():
+            model[0].bias.add_(1.0)  # a frozen part was trained by mistake
+        assert raises(save, root, 11, model, opt, sched, meta=META), "changed frozen part saved"
+        assert not (root / "step_00000011.tmp").exists()
     assert load(root, *make(0)) is None
     assert resumed == straight, f"losses differ after restore:\n{straight}\n{resumed}"
     print(f"selftest ok: {len(straight)} losses bit-equal after a CPU restore at step 5")
