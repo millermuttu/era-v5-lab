@@ -32,7 +32,7 @@ of that. We change five things, each tied to a V4 failure:
 | Resume checked by eye: "loss close to ~7.x, no spike" | Small state errors pass unseen | Automated **bit-equal** test (§9) |
 | CUDA RNG saved for the current device only | Other devices' dropout and sampling streams are lost | RNG for every device, plus sampler state (§3) |
 | Converter wrote weights under the wrong names; load did not check | **Silent misload**: step-1 loss 2.95 instead of 2.55, after five cheap checks passed | Strict name/shape/dtype load on every path, plus a step-1 loss check against the manifest (§6) |
-| Two stacks (cu128 pins vs cu130 nightly + S3 tarball) | flash-attn version drift on a new machine | Image digest and library versions in the manifest; restore refuses a mismatch unless overridden (§6) |
+| Two stacks (cu128 pins vs a cu130 nightly) | flash-attn version drift on a new machine | Image digest and library versions in the manifest; restore refuses a mismatch unless overridden (§6) |
 | One node, fixed world size | — | V5 is multi-node: per-rank shards, **resharding on load** when the world size changes after a node is lost |
 
 ## 3. State inventory
@@ -64,7 +64,7 @@ weight.
 | Model (total params) | Checkpoint ≈ 14 B/param | Per GPU at 64 GPUs |
 |---|---|---|
 | 30B | 420 GB | 6.6 GB |
-| 500B (S16 worked example, 3% active) | 7.0 TB | 109 GB |
+| 500B (S16 worked example, 3% active) | several TB | 109 GB |
 
 The final V5 numbers wait for the model configuration, which freezes on 3 November.
 

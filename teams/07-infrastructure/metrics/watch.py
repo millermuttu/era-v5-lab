@@ -19,7 +19,7 @@ import yaml
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 from common.events import emit, read_all  # noqa: E402
-from metrics.evaluate import CATALOG, ORDER, Run, compute, severity  # noqa: E402
+from metrics.evaluate import CATALOG, ORDER, Run, cluster_cost_h, compute, price_arg, severity  # noqa: E402
 
 
 def message(alert) -> str:
@@ -49,13 +49,14 @@ def main():
     ap.add_argument("--nodes", type=int, default=2)
     ap.add_argument("--interval-s", type=float, default=1800)
     ap.add_argument("--every", type=float, default=30)
-    ap.add_argument("--prices", default=os.path.join(HERE, "prices.yaml"))
+    price_arg(ap)
     ap.add_argument("--sim", action="store_true")
     ap.add_argument("--once", action="store_true")
     a = ap.parse_args()
     cat = yaml.safe_load(open(CATALOG))
-    p = yaml.safe_load(open(a.prices))
-    price = p["instances"][p["main_instance"]]["on_demand_usd_h"] * a.nodes
+    price, unit = cluster_cost_h(a)
+    for x in cat["metrics"]:
+        x["unit"] = unit if x["unit"] == "node-h" else x["unit"]    # CK-02 is money when a price is given
     interval_cost = price * a.interval_s / 3600
     hook = os.environ.get("V5_ALERT_WEBHOOK")
     state = {}          # metric id -> highest severity already raised

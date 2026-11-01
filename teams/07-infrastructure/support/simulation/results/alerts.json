@@ -72,7 +72,7 @@
  {
   "id": "C-02",
   "severity": "high",
-  "name": "Cost per productive GPU-hour vs list price",
+  "name": "Node-hours per productive node-hour",
   "value": 8.7476,
   "unit": "ratio",
   "action": "Fix the largest waste bucket (C-03).",
@@ -85,7 +85,7 @@
   "name": "Wasted share of main-run spend",
   "value": 88.5684,
   "unit": "%",
-  "action": "The report lists each bucket in USD.",
+  "action": "The report lists each bucket in node-hours.",
   "expected_in_sim": false,
   "fault_rate_driven": true
  },
@@ -172,9 +172,9 @@
  {
   "id": "CK-02",
   "severity": "low",
-  "name": "Compute dollars at risk (since last commit)",
-  "value": 0.6874,
-  "unit": "USD",
+  "name": "Compute at risk (since last commit)",
+  "value": 0.006,
+  "unit": "node-h",
   "action": "Same as CK-01. Thresholds are multiples of the cost of one interval.",
   "expected_in_sim": false,
   "fault_rate_driven": false

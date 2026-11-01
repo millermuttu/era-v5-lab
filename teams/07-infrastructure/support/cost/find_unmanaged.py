@@ -44,7 +44,8 @@ def slurm_nodes(path=None):
     return dict(line.split()[:2] for line in text.splitlines() if line.strip())
 
 
-def check(instances, nodes, prices):
+def check(instances, nodes, price_node_h=None):
+    """Cost at risk is in node-hours (each instance = one node); in money only with a run-time price."""
     unmanaged, untagged, idle_powered = [], [], []
     for i in instances:
         name = i["tags"].get("Name", "")
@@ -52,33 +53,31 @@ def check(instances, nodes, prices):
         if missing:
             untagged.append({"id": i["id"], "name": name, "missing": missing})
         st = nodes.get(name)
-        cost = prices.get(i["type"], 0.0)
         if i["tags"].get("v5:role") == "head":
             continue
         if st is None:
-            unmanaged.append({"id": i["id"], "name": name, "type": i["type"], "usd_h": cost,
+            unmanaged.append({"id": i["id"], "name": name, "type": i["type"],
                               "why": "running, but not a Slurm node"})
         elif any(s in st for s in ("~", "powered_down", "power_down", "cloud")):
-            idle_powered.append({"id": i["id"], "name": name, "type": i["type"], "usd_h": cost,
+            idle_powered.append({"id": i["id"], "name": name, "type": i["type"],
                                  "why": f"Slurm thinks it is powered down ({st})"})
     bad = unmanaged + idle_powered
     return {"unmanaged": bad, "untagged": untagged, "c05_count": len(bad),
-            "usd_per_day_at_risk": round(24 * sum(x["usd_h"] for x in bad), 2)}
+            "node_h_per_day_at_risk": 24 * len(bad),
+            "money_per_day_at_risk": round(24 * len(bad) * price_node_h, 2) if price_node_h else None}
 
 
 def main():
-    import yaml
     ap = argparse.ArgumentParser()
     ap.add_argument("--instances", help="JSON list (test fixture) instead of the live command")
     ap.add_argument("--instances-cmd", default=os.environ.get("V5_INSTANCES_CMD"),
                     help="command that prints running instances as JSON (the cloud's CLI)")
     ap.add_argument("--slurm-nodes", help="sinfo -N -o '%%N %%T' output (test fixture)")
-    ap.add_argument("--prices", default=os.path.join(os.path.dirname(__file__), "..", "..", "metrics", "prices.yaml"))
+    ap.add_argument("--price-node-h", type=float, default=os.environ.get("V5_PRICE_NODE_H") or None,
+                    help="price of one node-hour; not kept in the repo")
     a = ap.parse_args()
-    p = yaml.safe_load(open(a.prices))
-    prices = {k: v["on_demand_usd_h"] for k, v in p["instances"].items()}
     inst = json.load(open(a.instances)) if a.instances else live_instances(a.instances_cmd)
-    res = check(inst, slurm_nodes(a.slurm_nodes), prices)
+    res = check(inst, slurm_nodes(a.slurm_nodes), a.price_node_h)
     emit("cost.unmanaged_check", **res)
     print(json.dumps(res, indent=1))
     return 4 if res["c05_count"] else (3 if res["untagged"] else 0)

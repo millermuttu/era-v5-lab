@@ -7,9 +7,9 @@
   "computed": true
  },
  "CK-02": {
-  "name": "Compute dollars at risk (since last commit)",
-  "value": 0.6874,
-  "unit": "USD",
+  "name": "Compute at risk (since last commit)",
+  "value": 0.006,
+  "unit": "node-h",
   "severity": "low",
   "computed": true
  },
@@ -462,7 +462,7 @@
   "computed": false
  },
  "C-02": {
-  "name": "Cost per productive GPU-hour vs list price",
+  "name": "Node-hours per productive node-hour",
   "value": 8.7476,
   "unit": "ratio",
   "severity": "high",
@@ -499,14 +499,14 @@
  "C-07": {
   "name": "Cross-zone / internet egress",
   "value": null,
-  "unit": "USD/day",
+  "unit": "GB/day",
   "severity": null,
   "computed": false
  },
  "C-08": {
   "name": "Unattached block volumes / old snapshots",
   "value": null,
-  "unit": "USD/month",
+  "unit": "GB",
   "severity": null,
   "computed": false
  },

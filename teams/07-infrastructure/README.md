@@ -135,4 +135,4 @@ cluster this folder is mounted at `/opt/v5`, so `slurm.conf` and the job scripts
   `ckpt/loader_contract.py` (Teams 01/02).
 - Merging uz9ai's installer (`cluster.toml`) is phase B of [the merge plan](support/docs/merge_execution_plan.md).
 - The week-1 review findings and their fixes: [review_week1.md §2b](support/docs/review_week1.md).
-- Prices in `metrics/prices.yaml` are assumptions until checked; on-call rota and alert channel need people.
+- No prices in the repo (costs are node-hours; `--price-node-h` at run time); on-call rota and alert channel need people.

@@ -1,6 +1,6 @@
 # Simulation metrics report: run `v5main`
 
-Cluster price used: 2 × gpu-node-8 = **$227.86/h** (assumed price, see metrics/prices.yaml). Interval: 8 s (one interval = $0.51).
+Cost unit: **node-h** (2 nodes = 2.00 node-h per hour; the repo keeps no price, pass --price-node-h for money). Interval: 8 s (one interval = 0.0044 node-h).
 
 > In the simulation a fault is injected about once a minute, while a real run sees one every few hours or days. So goodput and cost-waste numbers here are far worse than production will be. The simulation proves the *mechanism* and measures each step's *duration*; `support/cost/cost_model.py --measured` projects those durations onto real failure rates.
 
@@ -17,8 +17,8 @@ Metrics in catalog: 74; computed from simulation events: 40.
 | HIGH | H-01 | Fatal Xid on a node | 1 count | no | Automatic drain + save; open a hardware ticket; replace the instance. |
 | HIGH | H-21 | Spot interruption notice | 1 count | yes | Automatic: drain + save + requeue. Page only if no commit within 90 s. |
 | HIGH | H-24 | Loss-spike guard trips | 1 count | yes | Look at the batches before the spike; rollback: --from-step <last good> --skip N --branch <new>. |
-| HIGH | C-02 | Cost per productive GPU-hour vs list price | 8.7476 ratio | fault rate | Fix the largest waste bucket (C-03). |
-| HIGH | C-03 | Wasted share of main-run spend | 88.5684 % | fault rate | The report lists each bucket in USD. |
+| HIGH | C-02 | Node-hours per productive node-hour | 8.7476 ratio | fault rate | Fix the largest waste bucket (C-03). |
+| HIGH | C-03 | Wasted share of main-run spend | 88.5684 % | fault rate | The report lists each bucket in node-hours. |
 | HIGH | C-04 | Cost of one incident | 21.4012 x interval cost | yes | Large values: missing emergency save, slow restore, or no spare. |
 | MEDIUM | CK-03 | Consecutive failed saves | 1 count | no | Read the failure cause (nvme_full, IntegrityError, upload timeout) and fix it now. |
 | MEDIUM | Q-04 | Crash-loop holds | 1 count | yes | Read the logs of the 3 crashes; for the main run this is also Q-02 (high). |
@@ -27,23 +27,23 @@ Metrics in catalog: 74; computed from simulation events: 40.
 | MEDIUM | Q-21 | Human interventions | 4 count/week | yes | Automate the step that needed a person. |
 | MEDIUM | H-14 | Step watchdog fired (hang) | 1.8239 count/h | fault rate | Read the stack dump in the job log and the NCCL flight-recorder trace; drain the rank that stopped. |
 | LOW | CK-01 | Time since last committed checkpoint | 1.3576 x interval | no | Check checkpoint.failed events; if saves fail, fix storage before the next failure costs a full interval. |
-| LOW | CK-02 | Compute dollars at risk (since last commit) | 0.6874 USD | no | Same as CK-01. Thresholds are multiples of the cost of one interval. |
+| LOW | CK-02 | Compute at risk (since last commit) | 0.006 node-h | no | Same as CK-01. Thresholds are multiples of the cost of one interval. |
 | LOW | CK-14 | Work lost per incident | 0.9738 x interval | no | Check that SIGUSR1/SIGTERM reached the trainer and the emergency save committed. |
 | LOW | CK-19 | Resharded resumes | 1 count | yes | Note it in the run log and the paper's failure table. |
 | LOW | Q-16 | Jobs rejected for no valid account | 1 count | yes | Check the submit system's account mapping. |
 | LOW | H-15 | Straggler ratio (rank step time / median) | 1.0895 ratio | no | Medium for 3 windows: drain at the next checkpoint. |
 
-## Where the main run's wall-clock time (and money) went
+## Where the main run's wall-clock time (and cost) went
 
-| Bucket | Seconds | Share | USD |
+| Bucket | Seconds | Share | Cost (node-h) |
 |---|---|---|---|
-| checkpoint_stall | 1.44 | 0.1% | $0.09 |
-| lost_work | 22.19 | 1.3% | $1.40 |
-| detection | 345.74 | 20.2% | $21.88 |
-| reschedule | 1025.49 | 59.8% | $64.91 |
-| restore | 125.12 | 7.3% | $7.92 |
-| productive | 196.19 | 11.4% | $12.42 |
-| wall_clock | 1716.17 | 100.0% | $108.62 |
+| checkpoint_stall | 1.44 | 0.1% | 0.0008 |
+| lost_work | 22.19 | 1.3% | 0.0123 |
+| detection | 345.74 | 20.2% | 0.1921 |
+| reschedule | 1025.49 | 59.8% | 0.5697 |
+| restore | 125.12 | 7.3% | 0.0695 |
+| productive | 196.19 | 11.4% | 0.1090 |
+| wall_clock | 1716.17 | 100.0% | 0.9534 |
 
 ## Recovery time by fault type (MTTR, seconds)
 
@@ -97,7 +97,7 @@ Metrics in catalog: 74; computed from simulation events: 40.
 | ID | Metric | Value | Unit | Severity |
 |---|---|---|---|---|
 | CK-01 | Time since last committed checkpoint | 1.3576 | x interval | LOW |
-| CK-02 | Compute dollars at risk (since last commit) | 0.6874 | USD | LOW |
+| CK-02 | Compute at risk (since last commit) | 0.006 | node-h | LOW |
 | CK-03 | Consecutive failed saves | 1 | count | MEDIUM |
 | CK-04 | Checksum mismatches (commit or restore) | 0 | count | OK |
 | CK-05 | Restore check failures (digest, probe, next batch, frozen) | 0 | count | OK |
@@ -133,6 +133,6 @@ Metrics in catalog: 74; computed from simulation events: 40.
 | H-18 | Required check skipped | 0 | count | OK |
 | H-21 | Spot interruption notice | 1 | count | HIGH |
 | H-24 | Loss-spike guard trips | 1 | count | HIGH |
-| C-02 | Cost per productive GPU-hour vs list price | 8.7476 | ratio | HIGH |
+| C-02 | Node-hours per productive node-hour | 8.7476 | ratio | HIGH |
 | C-03 | Wasted share of main-run spend | 88.5684 | % | HIGH |
 | C-04 | Cost of one incident | 21.4012 | x interval cost | HIGH |

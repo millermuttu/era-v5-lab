@@ -20,9 +20,9 @@ metrics:
    low: 1.2, medium: 1.5, high: 2.0, sim: true, owner: "07",
    why: "Everything trained since the last commit is lost if a node dies now.",
    action: "Check checkpoint.failed events; if saves fail, fix storage before the next failure costs a full interval."}
-- {id: CK-02, area: checkpoint, name: Compute dollars at risk (since last commit), unit: USD, direction: above,
+- {id: CK-02, area: checkpoint, name: Compute at risk (since last commit), unit: node-h, direction: above,
    low: 1.2, medium: 1.5, high: 2.0, scale: interval_cost, sim: true, owner: "07",
-   why: "The same risk in money: cluster price x time since the last commit.",
+   why: "The same risk in node-hours: cluster nodes x time since the last commit.",
    action: "Same as CK-01. Thresholds are multiples of the cost of one interval."}
 - {id: CK-03, area: checkpoint, name: Consecutive failed saves, unit: count, direction: above,
    low: null, medium: 1, high: 2, sim: true, owner: "07",
@@ -120,7 +120,7 @@ metrics:
    action: "Group incidents by node and cause_class; drain repeat offenders."}
 - {id: Q-06, area: queue, name: "Idle GPU node-hours (up, no job)", unit: node-h/day, direction: above,
    low: 0.5, medium: 2, high: 4, sim: false, owner: "07",
-   why: "An idle running GPU node costs the full hourly price for nothing.",
+   why: "An idle running GPU node uses a full node-hour every hour for nothing.",
    action: "Check SuspendTime / power saving; stop forgotten instances."}
 - {id: Q-07, area: queue, name: Allocated but not stepping, unit: s, direction: above,
    low: null, medium: 300, high: 900, sim: true, owner: "07",
@@ -281,37 +281,37 @@ metrics:
    why: "Async staging needs pinned host RAM; without it saves fail or the node swaps.",
    action: "Find the memory leak (data loader workers); restart at next checkpoint."}
 
-# ------------------------------------------------------------------ cost: every dollar accounted for
+# ------------------------------------------------------------------ cost: every node-hour accounted for
 - {id: C-01, area: cost, name: Burn rate vs plan, unit: ratio, direction: above,
    low: 1.05, medium: 1.1, high: 1.25, sim: false, owner: "07 + lead",
    why: "Spending faster than the plan ends the budget before training ends.",
    action: "Find what is running outside the capacity calendar; stop it."}
-- {id: C-02, area: cost, name: Cost per productive GPU-hour vs list price, unit: ratio, direction: above,
+- {id: C-02, area: cost, name: Node-hours per productive node-hour, unit: ratio, direction: above,
    low: 1.08, medium: 1.11, high: 1.25, sim: true, owner: "07",
-   why: "price / goodput: what one useful GPU-hour really costs. 1.11 = goodput 90%.",
+   why: "1 / goodput: what one useful node-hour really costs. 1.11 = goodput 90%.",
    action: "Fix the largest waste bucket (C-03)."}
 - {id: C-03, area: cost, name: Wasted share of main-run spend, unit: "%", direction: above,
    low: 8, medium: 10, high: 20, sim: true, owner: "07",
-   why: "Stall + lost work + detection + reschedule + restore, in money.",
-   action: "The report lists each bucket in USD."}
+   why: "Stall + lost work + detection + reschedule + restore, in node-hours.",
+   action: "The report lists each bucket in node-hours."}
 - {id: C-04, area: cost, name: Cost of one incident, unit: x interval cost, direction: above,
    low: 0.75, medium: 1.5, high: 3.0, sim: true, owner: "07",
-   why: "(lost work + detect + reschedule + restore) x cluster price.",
+   why: "(lost work + detect + reschedule + restore) x cluster nodes.",
    action: "Large values: missing emergency save, slow restore, or no spare."}
 - {id: C-05, area: cost, name: Instances running that Slurm does not know, unit: count, direction: above,
    low: null, medium: null, high: 1, sim: false, owner: "07",
-   why: "A forgotten GPU instance can cost thousands of dollars a day (V4: a cluster idle for 3 days).",
+   why: "A forgotten GPU instance burns 24 node-hours a day (V4: a cluster idle for 3 days).",
    action: "Stop it now; find who started it."}
 - {id: C-06, area: cost, name: Budget days left vs training days left, unit: ratio, direction: below,
    low: 1.2, medium: 1.0, high: 0.8, sim: false, owner: "lead",
    why: "Below 1.0 the money runs out before training finishes.",
    action: "Cut team allocations or the run length; decide early."}
-- {id: C-07, area: cost, name: Cross-zone / internet egress, unit: USD/day, direction: above,
-   low: 1, medium: 20, high: null, sim: false, owner: "07",
+- {id: C-07, area: cost, name: Cross-zone / internet egress, unit: GB/day, direction: above,
+   low: 10, medium: 200, high: null, sim: false, owner: "07",
    why: "Data transfer out of the region or across AZs is billed per GB; it should be near 0.",
    action: "Keep nodes, bucket and eval in one region and zone; use a private storage endpoint."}
-- {id: C-08, area: cost, name: Unattached block volumes / old snapshots, unit: USD/month, direction: above,
-   low: 10, medium: 100, high: null, sim: false, owner: "07",
+- {id: C-08, area: cost, name: Unattached block volumes / old snapshots, unit: GB, direction: above,
+   low: 100, medium: 1000, high: null, sim: false, owner: "07",
    why: "Storage left behind keeps billing.",
    action: "Delete or snapshot-and-delete."}
 - {id: C-09, area: cost, name: Spare node cost share, unit: "%", direction: above,

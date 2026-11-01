@@ -188,8 +188,8 @@ so the review asked for margin: 60 s is twice the prolog budget.
 
 > **Lesson from simulation run 7.** We first forced an immediate restart (~4 s). Sometimes the job started
 > while the old credential was still valid; Slurm killed it ("Job credential revoked") and marked it
-> **FAILED**: the main run was lost. We removed that trick. ~90 s per restart (~$23 on 8 nodes at assumed
-> prices) is the price of never losing the run.
+> **FAILED**: the main run was lost. We removed that trick. ~90 s per restart (~0.2 node-hours on 8 nodes)
+> is the price of never losing the run.
 
 ### When there are not enough nodes
 
@@ -333,7 +333,7 @@ Full list: Q-01 … Q-21 in [metrics_catalog.md](../support/docs/metrics_catalog
 
 ## 10. Still open
 
-- GPU type and count; reserved capacity booking or on-demand; real prices.
+- GPU type and count; reserved capacity booking or on-demand; the node-hour price (a run-time input).
 - cloud account: cloud roles, bucket names, the fast network, Pyxis/Enroot, power-saving scripts (`node_suspend.sh` /
   `node_resume.sh` are week-2 work).
 - The submit system's contract (does it call `sbatch` with an account?).

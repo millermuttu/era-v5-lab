@@ -161,7 +161,7 @@ says what to do for each.
 - Every exit code, error and alert can be explained in plain words: `python metrics/explain.py <anything>`.
 - Cost: GPU-hours per team, the cost of a lost hour, and a check for paid machines that Slurm does not know
   about (the "forgotten test box").
-- Prices in the repo are **assumptions** until checked against the real price list.
+- The repo keeps **no prices**: costs are node-hours, and a node-hour price is given at run time (`--price-node-h`).
 
 **Why.** An alert that only says "CK-05" at 3 a.m. wastes the first 20 minutes of an incident. Every alert names the
 next step.
@@ -229,7 +229,7 @@ everything except the GPUs themselves; Kaggle covers the GPUs.
 | `queue/` | the job wrapper (exit codes, crash-loop cap, job comment), spot watcher, hot spare, drain, status | every job; every node; the controller |
 | `slurm/` | `slurm.conf`, cloud/bare-metal node files, job scripts (main run, team job), prolog / epilog / periodic health hooks, account setup, database backup, background service units | the controller and every node |
 | `health/` | node checks, GPU error codes, the four GPU data-exchange tests, thresholds | before every job, every 30 s, before a dry run |
-| `metrics/` | the 74-metric catalogue, live alert watcher, run report, `explain.py`, price assumptions | the controller |
+| `metrics/` | the 74-metric catalogue, live alert watcher, run report, `explain.py`, hardware assumptions | the controller |
 | `common/` | the event format every part writes, and every code's plain-words explanation | everywhere |
 | `ops/` | `launch.sh` (start-up in order) and its settings file | an admin machine |
 | `support/tests/` | unit tests | a laptop or CI |

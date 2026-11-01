@@ -2,11 +2,14 @@
 
 In simple words: a failure costs us the work since the last checkpoint plus the time to restart.
 Saving more often loses less work per failure, but every save pauses all GPUs a little. This script
-finds the interval with the lowest total waste, and turns waste into dollars. It also answers:
-- Is spot (cheaper, but taken away more often) cheaper per USEFUL GPU-hour than on-demand?
+finds the interval with the lowest total waste, and gives waste in node-hours. It also answers:
+- Is spot (cheaper, but taken away more often) cheaper per USEFUL node-hour than on-demand?
 - Does a hot spare node pay for itself?
 
 Model sizes are still open in config_v0.yaml (TSAI fills them on 31 Oct), so the model takes a range.
+
+Costs are node-hours (spot node-hours are weighted by 1 - spot_discount). The repo keeps no price; pass
+--price-node-h (or set V5_PRICE_NODE_H) to get money instead.
 
     python support/cost/cost_model.py [--measured support/simulation/results/metrics.json] [--out support/cost/cost_report.md]
 """
@@ -47,11 +50,12 @@ def ckpt_bytes(params: float, bpp: float) -> float:
     return params * bpp
 
 
-def scenario(p, params, nodes, mtbf_gph, mttr_s, price_key="on_demand", interval_s=None):
+def scenario(p, params, nodes, mtbf_gph, mttr_s, price_key="on_demand", interval_s=None, price=1.0):
+    """price: price of one node-hour; 1.0 gives every cost in node-hours."""
     inst = p["instances"][p["main_instance"]]
     hw = p["hardware"]
     gpus = nodes * inst["gpus"]
-    price_h = inst["on_demand_usd_h"] * nodes
+    price_h = price * nodes
     if price_key == "spot":
         price_h *= (1 - inst["spot_discount"])
     size = ckpt_bytes(params, p["checkpoint"]["bytes_per_param"])
@@ -66,39 +70,37 @@ def scenario(p, params, nodes, mtbf_gph, mttr_s, price_key="on_demand", interval
     T = max(T, upload * 1.2)                       # an interval shorter than the upload queues saves
     w = waste_share(T, stall, mttr, mtbf_s)
     good = max(0.0, 1 - w)
-    s3 = p["s3"]
-    storage_month = size / 1e9 * (p["checkpoint"]["keep_remote"] * s3["standard"]
-                                  + p["checkpoint"]["protected_per_month"] * s3["archive"])
-    return {"params_b": params / 1e9, "nodes": nodes, "gpus": gpus, "price_usd_h": round(price_h, 2),
+    stored_gb = size / 1e9 * (p["checkpoint"]["keep_remote"] + p["checkpoint"]["protected_per_month"])
+    return {"params_b": params / 1e9, "nodes": nodes, "gpus": gpus, "cost_h": round(price_h, 2),
             "ckpt_gb": round(size / 1e9, 1), "stall_s": round(stall, 2), "upload_s": round(upload, 1),
             "mtbf_h": round(mtbf_s / 3600, 1), "mttr_s": round(mttr, 1), "interval_min": round(T / 60, 1),
             "binding": pick["binding"], "young_min": round(pick["young_s"] / 60, 1),
-            "goodput": round(good, 4), "usd_per_productive_h": round(price_h / max(good, 1e-9), 2),
-            "waste_usd_per_day": round(price_h * 24 * w, 0), "lost_usd_per_failure": round(price_h * (T / 2 + mttr) / 3600, 2),
-            "storage_usd_month": round(storage_month, 2)}
+            "goodput": round(good, 4), "cost_per_productive_h": round(price_h / max(good, 1e-9), 2),
+            "waste_per_day": round(price_h * 24 * w, 2), "lost_per_failure": round(price_h * (T / 2 + mttr) / 3600, 2),
+            "stored_gb": round(stored_gb, 1)}
 
 
-def spot_vs_on_demand(p, params, nodes, mttr_s, od_mtbf_gph, spot_node_mtbf_h):
+def spot_vs_on_demand(p, params, nodes, mttr_s, od_mtbf_gph, spot_node_mtbf_h, price=1.0):
     """Spot: any node's reclaim stops the whole gang job, so job MTBF = node MTBF / nodes,
     on top of the hardware failure rate."""
-    od = scenario(p, params, nodes, od_mtbf_gph, mttr_s, "on_demand")
+    od = scenario(p, params, nodes, od_mtbf_gph, mttr_s, "on_demand", price=price)
     gpus = nodes * p["instances"][p["main_instance"]]["gpus"]
     hw_rate = gpus / od_mtbf_gph                    # failures per hour from hardware
     spot_rate = nodes / spot_node_mtbf_h            # reclaims per hour
     spot_mtbf_gph = gpus / (hw_rate + spot_rate)
     # A reclaim also needs new spot capacity: add the instance launch time to MTTR.
-    sp = scenario(p, params, nodes, spot_mtbf_gph, mttr_s + p["hardware"]["instance_launch_s"], "spot")
+    sp = scenario(p, params, nodes, spot_mtbf_gph, mttr_s + p["hardware"]["instance_launch_s"], "spot", price=price)
     return od, sp
 
 
-def spare_value(p, nodes, mtbf_gph, mttr_with_spare_s):
+def spare_value(p, nodes, mtbf_gph, mttr_with_spare_s, price=1.0):
     inst = p["instances"][p["main_instance"]]
     gpus = nodes * inst["gpus"]
     fails_per_h = gpus / mtbf_gph
     saved_s_per_h = fails_per_h * p["hardware"]["instance_launch_s"]
-    saved_usd_h = saved_s_per_h / 3600 * inst["on_demand_usd_h"] * nodes
-    return {"nodes": nodes, "spare_usd_h": inst["on_demand_usd_h"], "saved_usd_h": round(saved_usd_h, 2),
-            "pays_for_itself": saved_usd_h >= inst["on_demand_usd_h"],
+    saved_h = saved_s_per_h / 3600 * price * nodes
+    return {"nodes": nodes, "spare_cost_h": price, "saved_per_h": round(saved_h, 2),
+            "pays_for_itself": saved_h >= price,
             "break_even_fails_per_day": round(24 * 3600 / p["hardware"]["instance_launch_s"] / nodes, 2)}
 
 
@@ -112,10 +114,13 @@ def table(rows, cols):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prices", default=os.path.join(HERE, "..", "..", "metrics", "prices.yaml"))
+    ap.add_argument("--price-node-h", type=float, default=os.environ.get("V5_PRICE_NODE_H") or None,
+                    help="price of one node-hour (not kept in the repo); without it costs are in node-hours")
     ap.add_argument("--measured", help="metrics.json from the simulation: uses its measured MTTR")
     ap.add_argument("--out", default=os.path.join(HERE, "cost_report.md"))
     a = ap.parse_args()
     p = yaml.safe_load(open(a.prices))
+    price, unit = (a.price_node_h, "money") if a.price_node_h else (1.0, "node-hours")
     mttr_s = 300.0
     src = "assumed 300 s (detect + reschedule + load), before the restore download"
     if a.measured and os.path.exists(a.measured):
@@ -125,15 +130,16 @@ def main():
             mttr_s, src = float(v), f"measured in the Docker simulation ({v:.0f} s; tiny model, so no download time)"
 
     lines = ["# Cost model report", "",
-             f"Generated by `support/cost/cost_model.py`. Prices: `{os.path.basename(a.prices)}` "
-             f"(**assumptions; checked: {p['checked']}**). Instance: {p['main_instance']}. "
+             f"Generated by `support/cost/cost_model.py`. Hardware: `{os.path.basename(a.prices)}` "
+             f"(assumptions; checked: {p['checked']}). Node: {p['main_instance']}. "
+             f"**Cost unit: {unit}** (cost_h, cost_per_productive_h, lost_per_failure, waste_per_day; the repo "
+             f"keeps no price). stored_gb: checkpoint data kept in the store. "
              f"MTTR before download: {src}.", "",
              "Model sizes are open in config_v0.yaml, so each table runs over 1B, 7B and 30B parameters.", ""]
-    cols = ["params_b", "nodes", "gpus", "price_usd_h", "ckpt_gb", "stall_s", "mtbf_h", "interval_min", "binding",
-            "young_min", "goodput", "usd_per_productive_h", "lost_usd_per_failure", "waste_usd_per_day",
-            "storage_usd_month"]
+    cols = ["params_b", "nodes", "gpus", "cost_h", "ckpt_gb", "stall_s", "mtbf_h", "interval_min", "binding",
+            "young_min", "goodput", "cost_per_productive_h", "lost_per_failure", "waste_per_day", "stored_gb"]
     for name, gph in MTBF_PRIORS.items():
-        rows = [scenario(p, params, n, gph, mttr_s) for params in (1e9, 7e9, 30e9) for n in (2, 4, 8)]
+        rows = [scenario(p, params, n, gph, mttr_s, price=price) for params in (1e9, 7e9, 30e9) for n in (2, 4, 8)]
         lines += [f"## On-demand, failure rate from {name} ({gph:,} GPU-h per interruption)", "",
                   table(rows, cols), ""]
 
@@ -143,10 +149,10 @@ def main():
     rows = []
     for spot_h in (24, 72, 168):
         for n in (2, 8):
-            od, sp = spot_vs_on_demand(p, 7e9, n, mttr_s, MTBF_PRIORS["S15 reference run"], spot_h)
-            rows.append({"nodes": n, "spot_node_mtbf_h": spot_h, "od_usd_per_productive_h": od["usd_per_productive_h"],
-                         "spot_usd_per_productive_h": sp["usd_per_productive_h"], "spot_goodput": sp["goodput"],
-                         "cheaper": "spot" if sp["usd_per_productive_h"] < od["usd_per_productive_h"] else "on-demand"})
+            od, sp = spot_vs_on_demand(p, 7e9, n, mttr_s, MTBF_PRIORS["S15 reference run"], spot_h, price)
+            rows.append({"nodes": n, "spot_node_mtbf_h": spot_h, "od_cost_per_productive_h": od["cost_per_productive_h"],
+                         "spot_cost_per_productive_h": sp["cost_per_productive_h"], "spot_goodput": sp["goodput"],
+                         "cheaper": "spot" if sp["cost_per_productive_h"] < od["cost_per_productive_h"] else "on-demand"})
     lines += [table(rows, list(rows[0])), "",
               "Spot looks cheaper per useful hour in these rows, but only if spot capacity for whole "
               "gpu-node-8 nodes can actually be obtained, and every reclaim adds a restart that a person may have to "
@@ -156,12 +162,12 @@ def main():
     lines += ["## Hot spare node", "",
               "In simple words: a spare costs one node-hour every hour. It pays for itself only if it saves more "
               "than that by cutting each failure's restart from 'launch a new instance' to 'use the spare now'.", ""]
-    rows = [spare_value(p, n, MTBF_PRIORS["S15 reference run"], mttr_s) for n in (2, 4, 8, 16)]
+    rows = [spare_value(p, n, MTBF_PRIORS["S15 reference run"], mttr_s, price) for n in (2, 4, 8, 16)]
     lines += [table(rows, list(rows[0])), "",
-              "At this failure rate the spare's 15 minutes saved per failure is worth less than its price at "
+              "At this failure rate the spare's 15 minutes saved per failure is worth less than its own node-hour at "
               "every size here. Its other value is that the main run never waits for capacity that may not "
-              "exist. Decision (ADR 0004): keep one hot spare, but let it run preemptible team jobs, so it is "
-              "not idle money.", ""]
+              "exist. Decision (ADR 0004): keep one hot spare, but let it run preemptible team jobs, so its "
+              "node-hours are not idle.", ""]
     with open(a.out, "w") as f:
         f.write("\n".join(lines))
     print("\n".join(lines))

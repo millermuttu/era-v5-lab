@@ -845,7 +845,7 @@ def main():
     ctl("scancel -u svc; true")
     log("evaluating metrics")
     p = ctl(f"cd /opt/v5 && {PY} metrics/evaluate.py --events /s3/events --out /s3/report "
-            f"--prices metrics/prices.yaml --nodes 2 --interval-s {MAIN_ENV['INTERVAL_S']} --run {RUN} --sim")
+            f"--nodes 2 --interval-s {MAIN_ENV['INTERVAL_S']} --run {RUN} --sim")
     print(p.stdout[-4000:], p.stderr[-2000:])
     os.makedirs(RESULTS, exist_ok=True)
     for f in ("metrics.json", "alerts.json", "report.md"):

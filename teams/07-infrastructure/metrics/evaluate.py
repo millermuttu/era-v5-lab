@@ -1,8 +1,8 @@
-"""Turn events into metrics, goodput, dollars and alerts (ADR 0004).
+"""Turn events into metrics, goodput, cost and alerts (ADR 0004).
 
 In simple words: every component writes events. This script reads them, rebuilds each incident
 (fault -> job ends -> job restarts -> restore -> first useful step), splits the main run's wall-clock
-time into "useful training" and each kind of waste, prices the waste, and checks every metric in
+time into "useful training" and each kind of waste, costs the waste in node-hours, and checks every metric in
 metrics/catalog.yaml against its LOW / MEDIUM / HIGH thresholds.
 
     python metrics/evaluate.py --events /s3/events --out /s3/report --run v5main --nodes 2 --interval-s 1800
@@ -112,7 +112,8 @@ class Run:
         return out
 
 
-def compute(run: Run, price_usd_h: float, sim: bool):
+def compute(run: Run, cost_h: float, sim: bool):
+    """cost_h: cost of one wall-clock hour of the cluster (node-hours, or money with a price)."""
     m, detail = {}, {}
     I = run.interval_s
     commits = run.of("checkpoint.committed")
@@ -133,7 +134,7 @@ def compute(run: Run, price_usd_h: float, sim: bool):
         if base:
             at_risk = max(at_risk, s["t"] - max(base))
     m["CK-01"] = at_risk / I
-    m["CK-02"] = at_risk / 3600 * price_usd_h
+    m["CK-02"] = at_risk / 3600 * cost_h
     seq, worst = 0, 0
     for e in sorted(commits + failed, key=lambda e: e["t"]):
         seq = seq + 1 if e["event"] == "checkpoint.failed" else 0
@@ -222,8 +223,8 @@ def compute(run: Run, price_usd_h: float, sim: bool):
              "restore": sum(i["restore_s"] or 0 for i in incs)}
         b["productive"] = max(0.0, wall - sum(b.values()))
         buckets = {k: {"seconds": round(v, 2), "share": round(v / wall, 4),
-                       "usd": round(v / 3600 * price_usd_h, 2)} for k, v in b.items()}
-        buckets["wall_clock"] = {"seconds": round(wall, 2), "share": 1.0, "usd": round(wall / 3600 * price_usd_h, 2)}
+                       "cost": round(v / 3600 * cost_h, 4)} for k, v in b.items()}
+        buckets["wall_clock"] = {"seconds": round(wall, 2), "share": 1.0, "cost": round(wall / 3600 * cost_h, 4)}
         good = b["productive"] / wall
         m["Q-19"] = good * 100
         m["C-02"] = 1 / good if good else None
@@ -264,6 +265,17 @@ def compute(run: Run, price_usd_h: float, sim: bool):
     return m, detail
 
 
+def price_arg(ap):
+    ap.add_argument("--price-node-h", type=float, default=os.environ.get("V5_PRICE_NODE_H") or None,
+                    help="price of one node-hour (env V5_PRICE_NODE_H); without it costs are in node-hours. "
+                         "No price is kept in the repo.")
+
+
+def cluster_cost_h(a):
+    """Cost of one cluster hour and its unit: node-hours, or money when a price is given at run time."""
+    return a.nodes * (a.price_node_h or 1.0), ("money" if a.price_node_h else "node-h")
+
+
 def render_md(cat, path):
     lines = ["# Metrics catalog", "",
              "Generated from `metrics/catalog.yaml` by `python metrics/evaluate.py --render-md`. Do not edit by hand.",
@@ -291,7 +303,7 @@ def main():
     ap.add_argument("--run", default="v5main")
     ap.add_argument("--nodes", type=int, default=2)
     ap.add_argument("--interval-s", type=float, default=1800)
-    ap.add_argument("--prices", default=os.path.join(HERE, "prices.yaml"))
+    price_arg(ap)
     ap.add_argument("--sim", action="store_true", help="mark alerts caused by injected drills as expected")
     ap.add_argument("--render-md", help="write the catalog as a Markdown table and exit")
     a = ap.parse_args()
@@ -300,11 +312,12 @@ def main():
         render_md(cat, a.render_md)
         return 0
 
-    p = yaml.safe_load(open(a.prices))
-    price = p["instances"][p["main_instance"]]["on_demand_usd_h"] * a.nodes
+    cost_h, unit = cluster_cost_h(a)
+    for x in cat["metrics"]:
+        x["unit"] = unit if x["unit"] == "node-h" else x["unit"]    # CK-02 is money when a price is given
     run = Run(read_all(a.events), a.run, a.interval_s)
-    m, detail = compute(run, price, a.sim)
-    interval_cost = price * a.interval_s / 3600
+    m, detail = compute(run, cost_h, a.sim)
+    interval_cost = cost_h * a.interval_s / 3600
 
     alerts, metrics_out = [], {}
     for x in cat["metrics"]:
@@ -323,8 +336,8 @@ def main():
     json.dump(alerts, open(os.path.join(a.out, "alerts.json"), "w"), indent=1)
 
     L = [f"# Simulation metrics report: run `{a.run}`", "",
-         f"Cluster price used: {a.nodes} × {p['main_instance']} = **${price:,.2f}/h** (assumed price, see "
-         f"metrics/prices.yaml). Interval: {a.interval_s:.0f} s (one interval = ${interval_cost:,.2f}).", ""]
+         f"Cost unit: **{unit}** ({a.nodes} nodes = {cost_h:,.2f} {unit} per hour; the repo keeps no price, pass "
+         f"--price-node-h for money). Interval: {a.interval_s:.0f} s (one interval = {interval_cost:,.4f} {unit}).", ""]
     if a.sim:
         L += ["> In the simulation a fault is injected about once a minute, while a real run sees one every "
               "few hours or days. So goodput and cost-waste numbers here are far worse than production will be. "
@@ -339,10 +352,10 @@ def main():
                  f"{r['action']} |")
     b = detail["goodput_buckets"]
     if b:
-        L += ["", "## Where the main run's wall-clock time (and money) went", "",
-              "| Bucket | Seconds | Share | USD |", "|---|---|---|---|"]
+        L += ["", "## Where the main run's wall-clock time (and cost) went", "",
+              f"| Bucket | Seconds | Share | Cost ({unit}) |", "|---|---|---|---|"]
         for k, v in b.items():
-            L.append(f"| {k} | {v['seconds']} | {v['share'] * 100:.1f}% | ${v['usd']:,.2f} |")
+            L.append(f"| {k} | {v['seconds']} | {v['share'] * 100:.1f}% | {v['cost']:,.4f} |")
     if detail.get("mttr_by_kind"):
         L += ["", "## Recovery time by fault type (MTTR, seconds)", "", "| Fault | n | p50 | p95 | max |",
               "|---|---|---|---|---|"]
